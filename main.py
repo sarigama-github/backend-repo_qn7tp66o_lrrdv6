@@ -1,8 +1,13 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List
 
-app = FastAPI()
+from database import db, create_document, get_documents
+from schemas import Contact
+
+app = FastAPI(title="3D Portfolio API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,55 +19,61 @@ app.add_middleware(
 
 @app.get("/")
 def read_root():
-    return {"message": "Hello from FastAPI Backend!"}
-
-@app.get("/api/hello")
-def hello():
-    return {"message": "Hello from the backend API!"}
+    return {"message": "3D Portfolio backend is running"}
 
 @app.get("/test")
 def test_database():
-    """Test endpoint to check if database is available and accessible"""
-    response = {
+    """Health + DB connectivity."""
+    status = {
         "backend": "✅ Running",
         "database": "❌ Not Available",
-        "database_url": None,
-        "database_name": None,
+        "database_url": "❌ Not Set",
+        "database_name": "❌ Not Set",
         "connection_status": "Not Connected",
         "collections": []
     }
-    
+
     try:
-        # Try to import database module
-        from database import db
-        
+        if os.getenv("DATABASE_URL"):
+            status["database_url"] = "✅ Set"
+        if os.getenv("DATABASE_NAME"):
+            status["database_name"] = "✅ Set"
+
         if db is not None:
-            response["database"] = "✅ Available"
-            response["database_url"] = "✅ Configured"
-            response["database_name"] = db.name if hasattr(db, 'name') else "✅ Connected"
-            response["connection_status"] = "Connected"
-            
-            # Try to list collections to verify connectivity
+            status["database"] = "✅ Available"
             try:
-                collections = db.list_collection_names()
-                response["collections"] = collections[:10]  # Show first 10 collections
-                response["database"] = "✅ Connected & Working"
+                status["collections"] = db.list_collection_names()[:10]
+                status["connection_status"] = "Connected"
+                status["database"] = "✅ Connected & Working"
             except Exception as e:
-                response["database"] = f"⚠️  Connected but Error: {str(e)[:50]}"
+                status["database"] = f"⚠️ Connected but Error: {str(e)[:80]}"
         else:
-            response["database"] = "⚠️  Available but not initialized"
-            
-    except ImportError:
-        response["database"] = "❌ Database module not found (run enable-database first)"
+            status["database"] = "⚠️ Available but not initialized"
     except Exception as e:
-        response["database"] = f"❌ Error: {str(e)[:50]}"
-    
-    # Check environment variables
-    import os
-    response["database_url"] = "✅ Set" if os.getenv("DATABASE_URL") else "❌ Not Set"
-    response["database_name"] = "✅ Set" if os.getenv("DATABASE_NAME") else "❌ Not Set"
-    
-    return response
+        status["database"] = f"❌ Error: {str(e)[:120]}"
+
+    return status
+
+@app.post("/contact")
+def create_contact(contact: Contact):
+    """Persist a contact message to MongoDB."""
+    try:
+        inserted_id = create_document("contact", contact)
+        return {"ok": True, "id": inserted_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/contacts")
+def list_contacts(limit: int = 20):
+    try:
+        docs = get_documents("contact", limit=limit)
+        # Convert ObjectId to string
+        for d in docs:
+            if "_id" in d:
+                d["_id"] = str(d["_id"])
+        return {"ok": True, "items": docs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
